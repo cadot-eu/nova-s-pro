@@ -145,6 +145,7 @@
       <div class="ball-editor">
         <div class="editor-head">
           <h3>Balles <span id="ball-count" class="badge">0</span></h3>
+          <span class="envoi-badge" title="Réglages du prochain envoi : ils ne sont pas enregistrés avec l’exercice">Envoi</span>
           <label class="inline">
             Ordre
             <select id="drill-random">
@@ -161,6 +162,7 @@
             </select>
           </label>
           <input id="drill-mode-value" type="number" min="1" max="200" value="1" title="Valeur du mode">
+          <span id="envoi-note" class="envoi-note"></span>
           <button id="btn-add-ball" class="btn btn-ghost">+ Balle</button>
           <button id="btn-paste-ball" class="btn btn-ghost" disabled
                   title="Coller ici les réglages de la balle copiée">📋 Coller</button>

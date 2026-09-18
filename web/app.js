@@ -57,6 +57,18 @@ const state = {
   headAngle: 0,
   /** Placement physique du robot : case 0–8 et angle en degrés. */
   setup: { square: 4, angle: 0 },
+  /**
+   * Réglages d'ENVOI, et non de l'exercice : mode, valeur du mode, ordre
+   * aléatoire, compte à rebours.
+   *
+   * Ils ne sont PAS enregistrés dans la librairie et ne rendent pas l'exercice
+   * « modifié » : ce sont des façons de le lancer, pas ce qu'il est. Les régler
+   * ne doit donc ni forcer un enregistrement, ni créer un nouvel exercice, ni
+   * déclencher l'avertissement de modifications non enregistrées.
+   *
+   * Ils vivent le temps de la session et s'appliquent au prochain envoi.
+   */
+  envoi: { mode: 'endless', modeValue: 1, random: false, countdown: true },
   robot: { connected: false },
   cloudPage: 1,
   cloudTotal: 0,
@@ -1139,78 +1151,12 @@ async function recalerBalles({ index = null, champ = null } = {}) {
     + corrections.map((c) => `  • ${c}`).join('\n'));
 }
 
-/**
- * La pause se dit en **bpm**, pas en secondes.
- *
- * C'est la durée d'un battement à cette cadence : 30 bpm = 2 s, 60 bpm = 1 s,
- * 90 bpm = 0,67 s. L'utilisateur raisonne ainsi — « je marque un temps, comme si
- * la balle suivante partait à telle cadence » — et le chiffre se compare
- * directement au bpm des balles.
- *
- * Le pas est de 15 : 15 · 30 · 45 · 60 · 75 · 90, soit exactement les cadences
- * rondes du robot (0 / 25 / 50 / 75 / 100 % de son pourcentage interne).
- * `0` garde son sens : aucune pause, les balles s'enchaînent.
- */
-const BPM_PAUSE_STEP = 15;
-const BPM_PAUSE_MAX = 90;
-
-/** Durée stockée (secondes) → cadence affichée (bpm). 0 = pas de pause. */
-const pauseVersBpm = (secondes) => (Number(secondes) > 0 ? Math.round(60 / Number(secondes)) : 0);
-
-/** Cadence saisie (bpm) → durée stockée (secondes). 0 = pas de pause. */
-const bpmVersPause = (bpm) => (Number(bpm) > 0 ? 60 / Number(bpm) : 0);
-
 /** Durée lisible, pour les infobulles et les messages. */
 function formatPause(secondes) {
   const s = Number(secondes) || 0;
   if (s <= 0) return 'aucune pause';
   const arrondi = Math.round(s * 100) / 100;
   return `${String(arrondi).replace('.', ',')} s`;
-}
-
-/**
- * Construit le séparateur inséré ENTRE la balle `index` et la suivante.
- *
- * C'est le seul endroit où l'on décide d'une pause : l'exercice est une suite de
- * balles, et une pause appartient à l'intervalle entre deux d'entre elles. Un
- * séparateur resté à 0 s'affiche en gris discret (les balles s'enchaînent), un
- * séparateur réglé s'affiche en évidence avec la durée.
- */
-function construireSeparateur(index, secondes) {
-  const bpm = pauseVersBpm(secondes);
-  const bloc = document.createElement('div');
-  bloc.className = 'between' + (bpm > 0 ? ' has-pause' : '');
-  bloc.innerHTML = `
-    <span class="between-line"></span>
-    <label class="between-label"
-           title="Pause APRÈS la balle ${index + 1}, avant la balle ${index + 2}, donnée comme une cadence : la durée d'un battement à ce bpm. ${bpm > 0 ? `Ici ${bpm} bpm, soit ${formatPause(secondes)}.` : ''} 0 = enchaîner directement.">
-      <span class="between-icon">⏸</span>
-      <span class="between-text">pause après la balle ${index + 1}</span>
-      <input type="number" min="0" max="${BPM_PAUSE_MAX}" step="${BPM_PAUSE_STEP}" value="${bpm}">
-      <span class="between-unit">bpm</span>
-    </label>
-    <span class="between-line"></span>`;
-
-  const champ = bloc.querySelector('input');
-  champ.addEventListener('input', () => {
-    if (!state.current) return;
-    // On saisit une cadence ; on stocke la DURÉE, parce que c'est l'unité dont
-    // le séquenceur a besoin. La conversion vit ici et nulle part ailleurs.
-    const saisi = Math.max(0, Math.min(BPM_PAUSE_MAX, Math.round(Number(champ.value) || 0)));
-    state.current.balls[index].pauseAfter = bpmVersPause(saisi);
-    bloc.classList.toggle('has-pause', saisi > 0);
-    majInfobulle(bloc, index);
-    marquerModifie();
-  });
-  // Quitter le champ remet une valeur propre (« 007 », « 46 » → 45).
-  champ.addEventListener('blur', () => {
-    const valeur = pauseVersBpm(state.current?.balls[index]?.pauseAfter ?? 0);
-    champ.value = String(valeur);
-    bloc.classList.toggle('has-pause', valeur > 0);
-    majInfobulle(bloc, index);
-  });
-
-  return bloc;
 }
 
 /* ------------------------------------------- copier, coller, réordonner --- */
@@ -1287,7 +1233,7 @@ function majBoutonColler() {
   if (coller) {
     coller.disabled = !state.copiedBall || plein;
     coller.title = !state.copiedBall
-      ? 'Copie d’abord une balle avec « 📋 Copier »'
+      ? 'Copie d’abord une balle avec le bouton « Copier »'
       : (plein ? `${MAX_BALLES} balles au maximum` : 'Coller à la fin les réglages de la balle copiée');
   }
   const ajouter = $('#btn-add-ball');
@@ -1299,17 +1245,68 @@ function majBoutonColler() {
   if (compte) compte.classList.toggle('is-full', plein);
 }
 
-/** Met à jour l'infobulle du séparateur, qui rappelle la durée obtenue. */
-function majInfobulle(bloc, index) {
-  const secondes = state.current?.balls?.[index]?.pauseAfter ?? 0;
-  const bpm = pauseVersBpm(secondes);
-  const label = bloc.querySelector('.between-label');
-  if (!label) return;
-  label.title = `Pause APRÈS la balle ${index + 1}, avant la balle ${index + 2}, donnée comme une `
-    + "cadence : la durée d'un battement à ce bpm."
-    + (bpm > 0 ? ` Ici ${bpm} bpm, soit ${formatPause(secondes)}.` : '')
-    + ' 0 = enchaîner directement.';
+/**
+ * Construit le séparateur placé après la balle `index`.
+ *
+ * Il existe APRÈS CHAQUE balle, y compris la dernière : quand l'exercice boucle
+ * (séries ou sans fin), l'intervalle entre la dernière balle d'un tour et la
+ * première du suivant est un temps de récupération, et il mérite d'être réglé
+ * comme les autres.
+ */
+function construireSeparateur(index, secondes, { derniere = false } = {}) {
+  const valeur = Number(secondes) || 0;
+  const bloc = document.createElement('div');
+  bloc.className = 'between' + (valeur > 0 ? ' has-pause' : '');
+  bloc.innerHTML = `
+    <span class="between-line"></span>
+    <label class="between-label" title="${infobullePause(index, valeur, derniere)}">
+      <span class="between-icon">⏸</span>
+      <span class="between-text">pause après la balle ${index + 1}${
+        derniere ? ' <em>(entre deux tours)</em>' : ''}</span>
+      <input type="number" min="0" max="600" step="1" value="${valeur}">
+      <span class="between-unit">s</span>
+    </label>
+    <span class="between-line"></span>`;
+
+  const champ = bloc.querySelector('input');
+  champ.addEventListener('input', () => {
+    if (!state.current) return;
+    // Une valeur vide vaut 0 ; le reste est borné à 600 s.
+    const saisie = Math.max(0, Math.min(600, Math.round(Number(champ.value) || 0)));
+    state.current.balls[index].pauseAfter = saisie;
+    bloc.classList.toggle('has-pause', saisie > 0);
+    majInfobulle(bloc, index, derniere);
+    marquerModifie();
+  });
+  // Quitter le champ nettoie « 007 » ou « 5,4 » en une valeur propre.
+  champ.addEventListener('blur', () => {
+    const apres = state.current?.balls?.[index]?.pauseAfter ?? 0;
+    champ.value = String(apres);
+    bloc.classList.toggle('has-pause', apres > 0);
+    majInfobulle(bloc, index, derniere);
+  });
+
+  return bloc;
 }
+
+/** Texte d'aide du séparateur. */
+function infobullePause(index, secondes, derniere) {
+  const suite = derniere
+    ? 'La balle suivante est la première du tour d’après : c’est un temps de récupération.'
+    : `Elle s’intercale avant la balle ${index + 2}.`;
+  return `Temps d'arrêt APRÈS la balle ${index + 1}. ${suite} `
+    + `0 = enchaîner directement.${secondes > 0 ? ` Ici ${formatPause(secondes)}.` : ''}`;
+}
+
+/** Met à jour l'infobulle du séparateur. */
+function majInfobulle(bloc, index, derniere = false) {
+  const secondes = state.current?.balls?.[index]?.pauseAfter ?? 0;
+  const label = bloc.querySelector('.between-label');
+  if (label) label.title = infobullePause(index, secondes, derniere);
+}
+
+/** Le séparateur d'après la balle `index` concerne-t-il la dernière balle ? */
+const estDerniere = (index) => index === (state.current?.balls?.length ?? 0) - 1;
 
 function renderBallRows() {
   const conteneur = $('#ball-rows');
@@ -1415,11 +1412,12 @@ function renderBallRows() {
 
     conteneur.append(ligne);
 
-    // Séparateur entre cette balle et la suivante : c'est LÀ que l'on décide
-    // s'il y a une pause, et de combien de secondes. 0 = enchaînement direct.
-    if (i < balls.length - 1) {
-      conteneur.append(construireSeparateur(i, b.pauseAfter ?? 0));
-    }
+    // Séparateur après CETTE balle : c'est là qu'on décide d'une pause, et de
+    // combien de secondes. 0 = enchaînement direct. Il existe aussi après la
+    // dernière balle, pour régler la récupération entre deux tours.
+    conteneur.append(construireSeparateur(i, b.pauseAfter ?? 0, {
+      derniere: i === balls.length - 1,
+    }));
   });
 
   if (balls.length === 0) {
@@ -1440,6 +1438,35 @@ function marquerModifie() {
   state.dirty = true;
   majBoutonEnregistrer();
   $('#btn-revert').hidden = false;
+}
+
+/**
+ * Reflète les réglages d'envoi dans les champs.
+ *
+ * Ils appartiennent à la session, pas à l'exercice : les modifier ne marque donc
+ * PAS l'exercice comme modifié, et n'appelle jamais `marquerModifie`.
+ */
+function majReglagesEnvoi() {
+  const e = state.envoi;
+  const random = $('#drill-random');
+  if (random) random.value = String(Boolean(e.random));
+  const mode = $('#drill-mode');
+  if (mode) mode.value = e.mode ?? 'endless';
+  const valeur = $('#drill-mode-value');
+  if (valeur) valeur.value = e.modeValue ?? 1;
+  const compte = $('#chk-countdown');
+  if (compte) compte.checked = e.countdown !== false;
+  // La valeur du mode ne sert qu'aux modes « minutes » et « séries ».
+  const ligne = $('#drill-mode-value');
+  if (ligne) ligne.disabled = (e.mode ?? 'endless') === 'endless';
+
+  // On le dit à l'écran : ces réglages ne seront pas enregistrés.
+  const note = $('#envoi-note');
+  if (note) {
+    note.textContent = e.mode === 'endless'
+      ? 'Sans fin · non enregistré'
+      : `${e.mode === 'minutes' ? `${e.modeValue} min` : `${e.modeValue} série(s)`} · non enregistré`;
+  }
 }
 
 /** Active le bouton Enregistrer selon ce qu'il y a à enregistrer. */
@@ -1520,9 +1547,14 @@ async function afficherExercice(drill, { originalId = null, isDraft = false } = 
   $('#btn-share').disabled = false;
   $('#btn-delete').disabled = brouillon;
 
-  $('#drill-random').value = String(Boolean(state.current.random));
-  $('#drill-mode').value = state.current.mode ?? 'endless';
-  $('#drill-mode-value').value = state.current.modeValue ?? 1;
+  // Un BROUILLON (généré par l'IA, importé) porte une intention de mode : on
+  // l'adopte. Un exercice de la librairie, non — le mode n'en fait plus partie.
+  if (isDraft) {
+    if (drill.mode) state.envoi.mode = drill.mode;
+    if (drill.modeValue !== undefined) state.envoi.modeValue = drill.modeValue;
+    if (drill.random !== undefined) state.envoi.random = Boolean(drill.random);
+  }
+  majReglagesEnvoi();
 
   state.selectedBall = 0;
   renderBallRows();
@@ -1568,11 +1600,9 @@ async function chargerLibrairie() {
     li.dataset.id = d.id;
     if (d.id === state.originalId) li.classList.add('is-active');
 
-    const mode = d.mode === 'endless' ? 'sans fin'
-      : d.mode === 'minutes' ? `${d.modeValue} min` : `${d.modeValue} sér.`;
     li.innerHTML = `
       <span class="name">${escapeHtml(d.name)}</span>
-      <span class="meta">${d.balls.length} balle(s) · ${mode} · ${d.random ? 'aléatoire' : 'fixe'}</span>
+      <span class="meta">${d.balls.length} balle(s)</span>
       <span class="mini-balls">${d.balls.map((b) => `
         <i class="mini-ball" style="background:${
           { green: 'var(--green)', yellow: 'var(--yellow)', orange: 'var(--orange)', blue: 'var(--blue)', grey: 'var(--grey)' }[b.color] ?? 'var(--grey)'
@@ -1825,7 +1855,7 @@ async function envoyerAuRobot() {
 
   // Décompte optionnel : coché par défaut. Il laisse le temps de reposer la
   // souris et de reprendre sa raquette avant que les balles ne partent.
-  if ($('#chk-countdown')?.checked) {
+  if (state.envoi.countdown !== false) {
     const continuer = await compteARebours(5, `Envoi de « ${state.current.name} » au robot…`);
     if (!continuer) {
       notice('Envoi annulé.');
@@ -1845,16 +1875,14 @@ async function envoyerAuRobot() {
         // d'envoyer une version périmée de l'exercice.
         name: state.current.name,
         balls: state.current.balls,
-        mode: state.current.mode,
-        modeValue: state.current.modeValue,
-        random: state.current.random,
+        mode: state.envoi.mode,
+        modeValue: state.envoi.modeValue,
+        random: state.envoi.random,
       },
     });
     majRobot(res.robot);
     if (res.sequence) {
-      // Le serveur raisonne en secondes (c'est ce dont le séquenceur a besoin) ;
-      // l'interface, elle, parle en bpm comme partout ailleurs.
-      const pauses = res.pauses.map((s) => `${pauseVersBpm(s)} bpm`).join(', ');
+      const pauses = res.pauses.map((s) => formatPause(s)).join(', ');
       notice(`Exercice « ${res.name} » envoyé en ${res.segments} segments `
         + `(pauses : ${pauses}). Les balles sans pause s’enchaînent normalement ; `
         + '« Arrêter » interrompt la séquence.');
@@ -1893,10 +1921,9 @@ async function enregistrer({ silencieux = false, renomme = false } = {}) {
     tags: state.current.tags,
     difficulty: state.current.difficulty,
     balls: state.current.balls,
-    mode: state.current.mode,
-    modeValue: state.current.modeValue,
-    random: state.current.random,
-    // Le réglage PHYSIQUE fait partie de l'exercice : il a été conçu avec cette
+    // NI mode, NI modeValue, NI random : ce sont des réglages d'envoi, ils ne
+    // font pas partie de l'exercice et ne sont donc pas enregistrés.
+    // Le réglage PHYSIQUE, lui, en fait partie : il a été conçu avec cette
     // position de robot et cette rotation de tête. On l'enregistre donc.
     headAngle: state.headAngle,
     robotSquare: state.setup.square,
@@ -2190,20 +2217,25 @@ async function demarrer() {
     }
   });
 
+  // Réglages d'ENVOI : ils ne touchent pas à l'exercice, donc jamais
+  // `marquerModifie()` — pas d'avertissement de modifications, pas de nouvel
+  // exercice créé à cause d'un changement de mode.
   $('#drill-random').addEventListener('change', (ev) => {
-    if (!state.current) return;
-    state.current.random = ev.target.value === 'true';
-    marquerModifie();
+    state.envoi.random = ev.target.value === 'true';
+    majReglagesEnvoi();
   });
   $('#drill-mode').addEventListener('change', (ev) => {
-    if (!state.current) return;
-    state.current.mode = ev.target.value;
-    marquerModifie();
+    state.envoi.mode = ev.target.value;
+    if (state.envoi.mode === 'endless') state.envoi.modeValue = 0;
+    else if (!state.envoi.modeValue) state.envoi.modeValue = 1;
+    majReglagesEnvoi();
   });
   $('#drill-mode-value').addEventListener('input', (ev) => {
-    if (!state.current) return;
-    state.current.modeValue = Number(ev.target.value) || 1;
-    marquerModifie();
+    state.envoi.modeValue = Math.max(1, Number(ev.target.value) || 1);
+    majReglagesEnvoi();
+  });
+  $('#chk-countdown').addEventListener('change', (ev) => {
+    state.envoi.countdown = ev.target.checked;
   });
   $('#btn-add-ball').addEventListener('click', () => {
     if (!state.current) return;

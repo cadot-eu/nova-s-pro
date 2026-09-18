@@ -217,7 +217,9 @@ test('créer, relire, modifier et supprimer un exercice', async () => {
   const id = cree.body.drill.id;
   assert.equal(id, 'exercice-api');
   assert.equal(cree.body.drill.balls.length, 3);
-  assert.equal(cree.body.drill.random, true);
+  // Le tirage aléatoire est un réglage d'ENVOI : il ne s'enregistre pas, même
+  // s'il figure dans le corps de la requête.
+  assert.equal(cree.body.drill.random, false, 'le réglage d’envoi n’est pas conservé');
   assert.equal(cree.body.drill.packetBytes, 79);
 
   const liste = await call('/api/drills');
@@ -240,11 +242,19 @@ test('créer, relire, modifier et supprimer un exercice', async () => {
 });
 
 test('un exercice invalide est refusé en 400, pas en 500', async () => {
-  for (const body of [{ balls: [] }, { balls: [{ speed: 'vite' }] }, { balls: BALLS, mode: 'sprint' }]) {
+  for (const body of [{ balls: [] }, { balls: [{ speed: 'vite' }] }]) {
     const res = await call('/api/drills', { method: 'POST', body });
     assert.equal(res.status, 400, `corps ${JSON.stringify(body).slice(0, 40)} → ${res.status}`);
     assert.match(res.body.error, /invalide/i);
   }
+
+  // Un mode inconnu ne concerne plus l'enregistrement (il n'est pas conservé)
+  // mais bien l'ENVOI : c'est là qu'il doit être refusé.
+  await call('/api/robot/connect', { method: 'POST', body: {} });
+  const envoi = await call('/api/robot/send', { method: 'POST', body: { balls: BALLS, mode: 'sprint' } });
+  assert.equal(envoi.status, 400, 'le mode est validé au moment de l’envoi');
+  assert.match(envoi.body.error, /Mode inconnu|invalide/i);
+  await call('/api/robot/disconnect', { method: 'POST', body: {} });
 });
 
 test('un identifiant inconnu renvoie 404 avec des suggestions', async () => {
@@ -416,13 +426,18 @@ test('le cycle connexion → envoi → arrêt fonctionne', async () => {
   const statut = await call('/api/robot/status');
   assert.equal(statut.body.robot.connected, true);
 
-  const envoi = await call('/api/robot/send', { method: 'POST', body: { id: cree.body.drill.id } });
+  // L'ordre aléatoire est un réglage d'envoi : on le transmet ici, comme le fait
+  // l'interface.
+  const envoi = await call('/api/robot/send', {
+    method: 'POST',
+    body: { id: cree.body.drill.id, random: true },
+  });
   assert.equal(envoi.status, 200);
   assert.equal(envoi.body.sent, true);
   assert.equal(envoi.body.bytes, 79);
   const dernier = robot.journal.filter((j) => j.action === 'send').at(-1);
   assert.equal(dernier.balls, 3);
-  assert.equal(dernier.random, true);
+  assert.equal(dernier.random, true, 'le réglage d’envoi est bien transmis');
 
   const arret = await call('/api/robot/stop', { method: 'POST', body: {} });
   assert.equal(arret.body.status, 'arrêté');
@@ -533,10 +548,19 @@ test('les pauses consécutives restent distinctes', () => {
   assert.deepEqual(segments.map((sg) => sg.pause), [4, 4, 0]);
 });
 
-test('une pause sur la dernière balle est ignorée : il n’y a plus rien à attendre', () => {
+test('une pause sur la dernière balle compte : c’est la récupération entre deux tours', () => {
+  // Quand l'exercice boucle, l'intervalle entre la dernière balle d'un tour et
+  // la première du suivant se règle comme les autres.
   const segments = segmenterParPauses([balle(), balle(), balle(9)]);
   assert.equal(segments.length, 1);
-  assert.equal(segments[0].pause, 0);
+  assert.equal(segments[0].balls.length, 3);
+  assert.equal(segments[0].pause, 9, 'la pause de fin doit être conservée');
+});
+
+test('une pause au milieu ET à la fin donne deux segments', () => {
+  const segments = segmenterParPauses([balle(), balle(4), balle(6)]);
+  assert.deepEqual(segments.map((sg) => sg.balls.map((b) => b.numero)), [[1, 2], [3]]);
+  assert.deepEqual(segments.map((sg) => sg.pause), [4, 6]);
 });
 
 test('une pause nulle ou absente ne coupe rien', () => {
@@ -572,13 +596,22 @@ test('un exercice avec pause est annoncé comme une séquence, pas comme un envo
   await call('/api/robot/connect', { method: 'POST', body: {} });
   const cree = await call('/api/drills', {
     method: 'POST',
-    body: { name: 'Avec pause', balls: [balle(), balle(1, { frequency: 90 }), balle()] },
+    // Mode « séries 1 » EXPLICITE : sans lui, un exercice sans fin avec une
+    // pause boucle indéfiniment — c'est le comportement voulu, mais le test ne
+    // se terminerait jamais.
+    body: {
+      name: 'Avec pause',
+      mode: 'combos',
+      modeValue: 1,
+      balls: [balle(), balle(1, { frequency: 90 }), balle()],
+    },
   });
   assert.equal(cree.status, 200);
 
   const res = await call('/api/robot/send', {
     method: 'POST',
-    body: { id: cree.body.drill.id },
+    // Le mode est un réglage d'ENVOI : il ne vient pas de la librairie.
+    body: { id: cree.body.drill.id, mode: 'combos', modeValue: 1 },
   });
   assert.equal(res.status, 200);
   assert.equal(res.body.sequence, true);
@@ -630,7 +663,8 @@ test('les balles envoyées par le client priment sur la version enregistrée', a
   await call('/api/robot/connect', { method: 'POST', body: {} });
   const res = await call('/api/robot/send', {
     method: 'POST',
-    body: { id, name: 'Version écran', balls: [balle(), balle(4, { speed: 9 })] },
+    // Sans pause : on veut comparer l'envoi d'un paquet unique, pas une séquence.
+    body: { id, name: 'Version écran', balls: [balle(), balle(0, { speed: 9 })] },
   });
   assert.equal(res.status, 200);
   assert.equal(res.body.name, 'Version écran');
@@ -671,7 +705,10 @@ test('avec une pause, le mode « combos N » est respecté : N tours complets', 
   assert.equal(cree.status, 200);
   const marque = robot.journal.length;
 
-  const res = await call('/api/robot/send', { method: 'POST', body: { id: cree.body.drill.id } });
+  const res = await call('/api/robot/send', {
+    method: 'POST',
+    body: { id: cree.body.drill.id, mode: 'combos', modeValue: 2 },
+  });
   assert.equal(res.body.sequence, true);
   assert.equal(res.body.segments, 2);
 
@@ -693,6 +730,17 @@ test('avec une pause, le mode « combos N » est respecté : N tours complets', 
 
   await call('/api/robot/stop', { method: 'POST', body: {} });
   await call('/api/robot/disconnect', { method: 'POST', body: {} });
+  await call(`/api/drills/${encodeURIComponent(cree.body.drill.id)}`, { method: 'DELETE' });
+});
+
+test('le mode n’est PAS enregistré : le corps de la requête est ignoré', async () => {
+  const cree = await call('/api/drills', {
+    method: 'POST',
+    body: { name: 'Mode non conservé', mode: 'combos', modeValue: 7, random: true, balls: [balle()] },
+  });
+  const relu = await call(`/api/drills/${encodeURIComponent(cree.body.drill.id)}`);
+  assert.equal(relu.body.drill.mode, 'endless', 'le mode n’est pas conservé');
+  assert.equal(relu.body.drill.random, false, 'le tirage aléatoire non plus');
   await call(`/api/drills/${encodeURIComponent(cree.body.drill.id)}`, { method: 'DELETE' });
 });
 

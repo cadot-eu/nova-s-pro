@@ -82,6 +82,12 @@ const SPECS = {
     'no-wait': { type: 'boolean' },
     yes: { type: 'boolean', alias: 'y' },
     scan: { type: 'boolean' },
+    // Réglages d'ENVOI : ils ne sont pas enregistrés avec l'exercice, donc la
+    // ligne de commande doit pouvoir les préciser.
+    mode: { type: 'string' },
+    value: { type: 'string' },
+    random: { type: 'boolean' },
+    countdown: { type: 'string' },
   },
   stop: { ...GLOBAL, address: { type: 'string', alias: 'a' } },
   pause: { ...GLOBAL, address: { type: 'string', alias: 'a' } },
@@ -534,7 +540,21 @@ async function cmdSend(argv) {
   const ref = positional[0];
   if (!ref) throw new Error('Précise l’exercice : nova send <id|nom>');
 
-  const record = resolveDrillOrThrow(config, ref);
+  const enregistre = resolveDrillOrThrow(config, ref);
+  // Mode, valeur et ordre aléatoire sont des réglages d'ENVOI : ils ne sont pas
+  // dans la librairie, on les prend donc ici, et `buildDrill` les valide — un
+  // mode inconnu s'arrête net avec un message clair.
+  const { drill: record } = buildDrill({
+    balls: enregistre.balls,
+    mode: options.mode ? String(options.mode).toLowerCase() : (enregistre.mode ?? 'endless'),
+    modeValue: options.value !== undefined ? Number(options.value) : enregistre.modeValue,
+    random: options.random === undefined ? Boolean(enregistre.random) : Boolean(options.random),
+  });
+  // On garde le nom et l'identifiant, que `buildDrill` ne connaît pas.
+  record.name = enregistre.name;
+  record.id = enregistre.id;
+  record.description = enregistre.description;
+  record.tags = enregistre.tags;
 
   if (options['dry-run']) {
     const packet = packDrill(record);
@@ -1008,6 +1028,9 @@ ${bold('CONSULTER')}
 ${bold('ENVOYER')}
   nova scan                      Chercher le robot à proximité
   nova send <id|nom>             Envoyer l'exercice et rester connecté pendant qu'il tourne
+        --mode endless|minutes|combos   Mode de jeu (réglage d'envoi, non enregistré)
+        --value <n>              Minutes ou nombre de séries selon le mode
+        --random                 Ordre aléatoire (réglage d'envoi, non enregistré)
         --yes                    Envoyer sans demander confirmation
         --dry-run                Montrer le paquet sans rien envoyer ni connecter
         --no-wait                Envoyer et se déconnecter aussitôt

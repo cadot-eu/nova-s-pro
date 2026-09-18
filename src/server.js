@@ -241,7 +241,10 @@ export function segmenterParPauses(balls = []) {
   balls.forEach((balle, i) => {
     courant.push({ ...balle, numero: i + 1 });
     const pause = Math.max(0, Math.min(600, Number(balle.pauseAfter) || 0));
-    if (pause > 0 && i < balls.length - 1) {
+    // Une pause ferme TOUJOURS le segment, y compris sur la dernière balle :
+    // l'intervalle entre la dernière balle d'un tour et la première du suivant
+    // est un temps de récupération, et il se règle comme les autres.
+    if (pause > 0) {
       segments.push({ balls: courant, pause });
       courant = [];
     }
@@ -363,9 +366,13 @@ export function createNovaServer({
             logger.warn?.('Arrêt entre deux segments impossible :', err?.message ?? err);
           }
 
-          // La pause sépare deux segments : inutile après le dernier, il n'y a
-          // plus rien à espacer dans ce tour.
-          if (segment.pause > 0 && i < segments.length - 1) {
+          // La pause s'applique après CHAQUE segment, y compris le dernier :
+          // entre deux tours, c'est le temps de récupération. On l'épargne
+          // seulement quand il n'y aura plus de tour du tout.
+          const finiDeJouer = i === segments.length - 1
+            && ((mode === 'combos' && tour >= series)
+              || (finMinutes !== null && Date.now() >= finMinutes));
+          if (segment.pause > 0 && !finiDeJouer) {
             progress.robot.etape = `${entete} — pause après la balle ${numeros}`;
             await attendre(segment.pause * 1000);
           }
@@ -493,14 +500,18 @@ export function createNovaServer({
 
     // On valide AVANT d'écrire, comme le fait le CLI. Une entrée fautive est
     // une erreur du client (400), pas du serveur : on convertit explicitement.
+    // Le mode, sa valeur et l'ordre aléatoire sont des RÉGLAGES D'ENVOI, pas des
+    // propriétés de l'exercice : on ne les prend JAMAIS du client à
+    // l'enregistrement. On garde ceux déjà stockés (valeurs neutres pour un
+    // nouvel exercice), le temps que les anciens enregistrements s'effacent.
     let drill;
     let adjustments;
     try {
       ({ drill, adjustments } = buildDrill({
         balls,
-        mode: body.mode ?? existing?.mode ?? 'endless',
-        modeValue: body.modeValue ?? existing?.modeValue,
-        random: body.random ?? existing?.random ?? false,
+        mode: existing?.mode ?? 'endless',
+        modeValue: existing?.modeValue ?? 0,
+        random: existing?.random ?? false,
       }));
     } catch (err) {
       throw new HttpError(400, `Exercice invalide : ${err.message}`);
@@ -694,28 +705,33 @@ export function createNovaServer({
     //
     // L'interface expédie l'exercice tel qu'il est affiché : envoyer l'exercice
     // enregistré ferait jouer au robot une version périmée dès que l'utilisateur
-    // a modifié quelque chose sans le dire au serveur. On ne retombe sur la
-    // librairie que si le client n'a fourni aucune balle.
-    let drill = record;
-    if (Array.isArray(body.balls) && body.balls.length) {
-      try {
-        ({ drill } = buildDrill({
-          balls: body.balls,
-          mode: body.mode ?? record?.mode,
-          modeValue: body.modeValue ?? record?.modeValue,
-          random: body.random ?? record?.random,
-        }));
-      } catch (err) {
-        throw new HttpError(400, `Exercice invalide : ${err.message}`);
-      }
-    } else if (!drill) {
-      throw new HttpError(400, 'Aucune balle fournie.');
+    // a modifié quelque chose sans le dire au serveur.
+    //
+    // Les RÉGLAGES D'ENVOI (mode, valeur, ordre aléatoire) suivent la même règle,
+    // et c'est indispensable depuis qu'ils ne sont plus enregistrés : sans cela,
+    // un client qui n'envoie que l'identifiant — la ligne de commande, par
+    // exemple — retombait toujours sur le mode du disque, donc « sans fin ».
+    const reglages = {
+      mode: body.mode ?? record?.mode,
+      modeValue: body.modeValue ?? record?.modeValue,
+      random: body.random ?? record?.random,
+    };
+    const balls = (Array.isArray(body.balls) && body.balls.length) ? body.balls : record?.balls;
+    if (!balls || !balls.length) throw new HttpError(400, 'Aucune balle fournie.');
+
+    let drill;
+    try {
+      ({ drill } = buildDrill({ balls, ...reglages }));
+    } catch (err) {
+      throw new HttpError(400, `Exercice invalide : ${err.message}`);
     }
     if (!robot.connected) await robot.connect({ address: body.address ?? null });
 
     const segments = segmenterParPauses(drill.balls);
 
-    if (segments.length > 1) {
+    // Une pause sur la dernière balle ne crée qu'UN segment, mais elle doit
+    // quand même être honorée : c'est le temps de récupération entre deux tours.
+    if (segments.some((sg) => sg.pause > 0)) {
       if (sequence?.enCours) throw new HttpError(409, 'Une séquence est déjà en cours.');
       lancerSequence({ segments, drill, logger })
         .catch((err) => logger.error?.('Séquence :', err));
