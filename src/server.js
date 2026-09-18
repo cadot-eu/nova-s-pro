@@ -332,11 +332,36 @@ export function createNovaServer({
           progress.robot.etape =
             `${entete} — segment ${i + 1}/${segments.length} (balle(s) ${numeros})`;
 
+          // Trace détaillée : sans robot sous la main, c'est le seul moyen de
+          // savoir ce qui est parti, dans quel ordre et à quel moment.
+          logger.info?.(`Séquence → ${entete} · segment ${i + 1}/${segments.length} · `
+            + `balles ${numeros} · ${dureeSegment(segment).toFixed(2)} s`
+            + (segment.pause > 0 && i < segments.length - 1
+              ? ` · puis pause de ${segment.pause} s` : ''));
+
           await robot.sendDrill(
             { balls: segment.balls, mode: 'combos', modeValue: 1, random: aleatoire },
             {},
           );
           await attendre(dureeSegment(segment) * 1000);
+
+          // REMETTRE LE ROBOT À L'ARRÊT avant de lui donner le segment suivant.
+          //
+          // Le robot n'accepte un nouvel exercice que lorsqu'il est à l'arrêt :
+          // un paquet envoyé trop tôt après le précédent est purement IGNORÉ,
+          // sans erreur. C'est ce qui produisait des séries incomplètes —
+          // constaté sur « service et attaques x 2 » : le segment [b1, b2] du
+          // 2e tour, envoyé 1 s après [b3], ne partait jamais, alors que celui
+          // du 1er tour, précédé d'une pause de 4 s, passait très bien.
+          //
+          // On ne devine donc pas un délai : on utilise la commande d'arrêt du
+          // protocole, et son accusé nous sert de point de synchronisation.
+          // L'exercice du segment est de toute façon terminé à ce stade.
+          try {
+            await robot.stopDrill();
+          } catch (err) {
+            logger.warn?.('Arrêt entre deux segments impossible :', err?.message ?? err);
+          }
 
           // La pause sépare deux segments : inutile après le dernier, il n'y a
           // plus rien à espacer dans ce tour.

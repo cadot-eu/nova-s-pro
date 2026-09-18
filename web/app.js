@@ -1781,6 +1781,35 @@ async function basculerConnexion() {
   }
 }
 
+/**
+ * Suit la progression d'une séquence et l'affiche dans l'en-tête.
+ *
+ * Le serveur découpe l'exercice en segments et les envoie l'un après l'autre,
+ * avec les pauses. Pendant ce temps l'interface ne disait plus rien : impossible
+ * de savoir où en était la série, ni même si quelque chose était encore en
+ * cours. On interroge donc l'état une fois par seconde, tant que ça tourne.
+ */
+let suiviSequence = null;
+
+function suivreSequence() {
+  clearInterval(suiviSequence);
+  suiviSequence = setInterval(async () => {
+    try {
+      const etat = await api('/api/state');
+      const p = etat?.progress;
+      if (p?.enCours && p.etape) {
+        messageRobot(p.etape, 'busy');
+      } else {
+        clearInterval(suiviSequence);
+        suiviSequence = null;
+        messageRobot('Séquence terminée.');
+      }
+    } catch {
+      // Une lecture ratée n'interrompt pas la séquence.
+    }
+  }, 1000);
+}
+
 async function envoyerAuRobot() {
   if (!state.current) return;
 
@@ -1829,6 +1858,10 @@ async function envoyerAuRobot() {
       notice(`Exercice « ${res.name} » envoyé en ${res.segments} segments `
         + `(pauses : ${pauses}). Les balles sans pause s’enchaînent normalement ; `
         + '« Arrêter » interrompt la séquence.');
+      // On suit la séquence en direct dans l'en-tête : c'est la seule façon de
+      // voir ce que le logiciel fait PENDANT que le robot joue — quel segment
+      // part, combien de séries ont été faites.
+      suivreSequence();
     } else {
       notice(`Exercice « ${res.name} » envoyé (${res.bytes} octets). `
         + 'Le robot tourne jusqu’à ce que tu cliques « Arrêter ».');
@@ -2225,6 +2258,10 @@ async function demarrer() {
   /* --- robot */
   $('#btn-connect').addEventListener('click', basculerConnexion);
   $('#btn-stop').addEventListener('click', async () => {
+    // On coupe le suivi : sans cela, l'en-tête continuerait d'annoncer une étape
+    // alors que plus rien ne tourne.
+    clearInterval(suiviSequence);
+    suiviSequence = null;
     try {
       const res = await api('/api/robot/stop', { method: 'POST' });
       majRobot(res.robot);

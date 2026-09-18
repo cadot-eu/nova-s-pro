@@ -669,7 +669,7 @@ test('avec une pause, le mode « combos N » est respecté : N tours complets', 
     },
   });
   assert.equal(cree.status, 200);
-  const avant = robot.journal.filter((j) => j.action === 'send').length;
+  const marque = robot.journal.length;
 
   const res = await call('/api/robot/send', { method: 'POST', body: { id: cree.body.drill.id } });
   assert.equal(res.body.sequence, true);
@@ -678,13 +678,18 @@ test('avec une pause, le mode « combos N » est respecté : N tours complets', 
   // Un tour = 0,67 s + 0,05 s + 0,67 s ≈ 1,4 s ; deux tours ≈ 2,8 s.
   await new Promise((r) => setTimeout(r, 3200));
 
-  const envois = robot.journal.filter((j) => j.action === 'send').slice(avant);
+  const faits = robot.journal.slice(marque);
+  const envois = faits.filter((j) => j.action === 'send');
   assert.equal(envois.length, 4, 'deux séries de deux segments = quatre envois');
   // Et l'ordre alterne bien segment 1 / segment 2, deux fois.
   assert.deepEqual(envois.map((e) => e.balls), [1, 1, 1, 1]);
 
-  const arret = await call('/api/robot/status');
-  assert.equal(arret.body.robot.drilling, true, 'le robot a bien été sollicité');
+  // Le robot est remis à l'arrêt APRÈS CHAQUE segment : sans cela il ignore
+  // silencieusement l'exercice suivant, et l'on obtient des séries incomplètes.
+  const arrets = faits.filter((j) => j.action === 'stop').length;
+  assert.ok(arrets >= 4, `un arrêt par segment attendu, obtenu ${arrets}`);
+  assert.equal((await call('/api/robot/status')).body.robot.drilling, false,
+    'le robot doit être à l’arrêt entre deux segments');
 
   await call('/api/robot/stop', { method: 'POST', body: {} });
   await call('/api/robot/disconnect', { method: 'POST', body: {} });
