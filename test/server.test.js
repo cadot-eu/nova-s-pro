@@ -652,6 +652,45 @@ test('sans balle ni identifiant, l’envoi est refusé', async () => {
   await call('/api/robot/disconnect', { method: 'POST', body: {} });
 });
 
+test('avec une pause, le mode « combos N » est respecté : N tours complets', async () => {
+  // Régression vécue : « service et attaques x 2 » était réglé sur 3 séries et
+  // contenait une pause. Le séquenceur écrasait le mode en `combos 1` et ne
+  // bouclait qu'une fois — trois séries demandées, une seule jouée.
+  await call('/api/robot/connect', { method: 'POST', body: {} });
+  const cree = await call('/api/drills', {
+    method: 'POST',
+    body: {
+      name: 'Deux séries avec pause',
+      mode: 'combos',
+      modeValue: 2,
+      // Deux segments : la balle 1 (pause minuscule après elle), puis la balle 2.
+      // Cadence 90 bpm pour que chaque segment dure 0,67 s et que le test reste court.
+      balls: [balle(0.05, { frequency: 90 }), balle(0, { frequency: 90 })],
+    },
+  });
+  assert.equal(cree.status, 200);
+  const avant = robot.journal.filter((j) => j.action === 'send').length;
+
+  const res = await call('/api/robot/send', { method: 'POST', body: { id: cree.body.drill.id } });
+  assert.equal(res.body.sequence, true);
+  assert.equal(res.body.segments, 2);
+
+  // Un tour = 0,67 s + 0,05 s + 0,67 s ≈ 1,4 s ; deux tours ≈ 2,8 s.
+  await new Promise((r) => setTimeout(r, 3200));
+
+  const envois = robot.journal.filter((j) => j.action === 'send').slice(avant);
+  assert.equal(envois.length, 4, 'deux séries de deux segments = quatre envois');
+  // Et l'ordre alterne bien segment 1 / segment 2, deux fois.
+  assert.deepEqual(envois.map((e) => e.balls), [1, 1, 1, 1]);
+
+  const arret = await call('/api/robot/status');
+  assert.equal(arret.body.robot.drilling, true, 'le robot a bien été sollicité');
+
+  await call('/api/robot/stop', { method: 'POST', body: {} });
+  await call('/api/robot/disconnect', { method: 'POST', body: {} });
+  await call(`/api/drills/${encodeURIComponent(cree.body.drill.id)}`, { method: 'DELETE' });
+});
+
 test('un exercice sans pause reste un envoi unique', async () => {
   await call('/api/robot/connect', { method: 'POST', body: {} });
   const res = await call('/api/robot/send', {

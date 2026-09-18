@@ -264,6 +264,15 @@ export function createNovaServer({
   const progress = { robot: { enCours: false, etape: null, depuis: null } };
 
   /** Séquence d'envoi en cours, s'il y en a une. */
+  /**
+   * Séquence en cours, ou `null`.
+   *
+   * Chaque lancement possède SON objet, et la boucle teste le sien — jamais la
+   * variable partagée. Sans cela, une séquence abandonnée qui traînait encore
+   * dans une attente relisait la variable au tour suivant, y trouvait la
+   * NOUVELLE séquence (`enCours: true`) et repartait de plus belle : deux
+   * séquences se marchaient dessus et les balles partaient en double.
+   */
   let sequence = null;
 
   const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -281,37 +290,77 @@ export function createNovaServer({
    * La durée d'une balle se déduit de ses répétitions et de sa cadence :
    *   répétitions × 60 / fréquence  secondes.
    */
-  async function lancerSequence({ segments, logger }) {
-    sequence = { enCours: true };
+  /**
+   * Envoie un exercice découpé en segments, en respectant son MODE.
+   *
+   * Chaque segment part en `combos 1` : le robot doit jouer ces balles-là une
+   * fois, puis nous rendre la main pour placer la pause et enchaîner. Mais c'est
+   * le mode de l'EXERCICE qui décide combien de fois la séquence entière est
+   * rejouée :
+   *
+   *   combos 3  →  trois tours complets, pauses comprises
+   *   sans fin  →  on tourne jusqu'à l'arrêt
+   *   minutes M →  on tourne jusqu'à M minutes écoulées
+   *
+   * Sans cela, un exercice « 3 séries » contenant une pause n'était joué qu'une
+   * fois : le mode était écrasé par le séquenceur. C'est exactement le symptôme
+   * rapporté — trois séries demandées, une seule jouée.
+   */
+  async function lancerSequence({ segments, drill, logger }) {
+    const mode = drill?.mode ?? 'endless';
+    const series = Math.max(1, Number(drill?.modeValue) || 1);
+    const aleatoire = Boolean(drill?.random);
+
+    // Durée d'un segment : somme des répétitions de ses balles.
+    const dureeSegment = (sg) => sg.balls.reduce((t, b) => t + (b.reps * 60) / b.frequency, 0);
+    const finMinutes = mode === 'minutes' ? Date.now() + series * 60_000 : null;
+
+    const mien = { enCours: true };
+    sequence = mien;
     progress.robot = { enCours: true, etape: 'Départ…', depuis: Date.now() };
 
+    let tour = 0;
     try {
-      for (const [i, segment] of segments.entries()) {
-        if (!sequence?.enCours) break;
-        const numeros = segment.balls.map((b) => b.numero).join(', ');
-        progress.robot.etape = `Segment ${i + 1}/${segments.length} — balle(s) ${numeros}`;
+      do {
+        tour += 1;
+        for (const [i, segment] of segments.entries()) {
+          if (!mien.enCours) break;
+          const numeros = segment.balls.map((b) => b.numero).join(', ');
+          // En mode « séries », on annonce la série sur le total ; en « sans
+          // fin » et « minutes », on compte simplement les tours.
+          const entete = mode === 'combos' ? `Série ${tour}/${series}` : `Tour ${tour}`;
+          progress.robot.etape =
+            `${entete} — segment ${i + 1}/${segments.length} (balle(s) ${numeros})`;
 
-        await robot.sendDrill(
-          { balls: segment.balls, mode: 'combos', modeValue: 1, random: false },
-          {},
-        );
+          await robot.sendDrill(
+            { balls: segment.balls, mode: 'combos', modeValue: 1, random: aleatoire },
+            {},
+          );
+          await attendre(dureeSegment(segment) * 1000);
 
-        // Durée du segment : somme des répétitions de ses balles.
-        const secondes = segment.balls.reduce((t, b) => t + (b.reps * 60) / b.frequency, 0);
-        await attendre(secondes * 1000);
-
-        if (segment.pause > 0 && i < segments.length - 1) {
-          progress.robot.etape = `Pause de ${segment.pause} s après la balle ${numeros}`;
-          await attendre(segment.pause * 1000);
+          // La pause sépare deux segments : inutile après le dernier, il n'y a
+          // plus rien à espacer dans ce tour.
+          if (segment.pause > 0 && i < segments.length - 1) {
+            progress.robot.etape = `${entete} — pause après la balle ${numeros}`;
+            await attendre(segment.pause * 1000);
+          }
         }
-      }
-      logger.info?.('Séquence terminée.');
+        if (mode === 'combos' && tour >= series) break;
+        if (finMinutes !== null && Date.now() >= finMinutes) break;
+      } while (mien.enCours);
+
+      logger.info?.(`Séquence terminée : ${tour} tour(s), mode ${mode}`
+        + `${mode === 'combos' ? ` ${series}` : ''}, ${segments.length} segment(s).`);
     } catch (err) {
       logger.error?.('Séquence interrompue :', err);
       throw err;
     } finally {
-      sequence = null;
-      progress.robot = { enCours: false, etape: null, depuis: null };
+      // On ne remet à zéro QUE si l'on est encore la séquence courante : sinon on
+      // effacerait l'état d'une séquence plus récente, déjà lancée.
+      if (sequence === mien) {
+        sequence = null;
+        progress.robot = { enCours: false, etape: null, depuis: null };
+      }
     }
   }
 
@@ -643,7 +692,7 @@ export function createNovaServer({
 
     if (segments.length > 1) {
       if (sequence?.enCours) throw new HttpError(409, 'Une séquence est déjà en cours.');
-      lancerSequence({ segments, logger })
+      lancerSequence({ segments, drill, logger })
         .catch((err) => logger.error?.('Séquence :', err));
       return {
         sent: true,
