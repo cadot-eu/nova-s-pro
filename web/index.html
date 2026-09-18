@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NovaKontrol — exercices du Pongbot Nova S Pro</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23ff7a45'/><circle cx='16' cy='16' r='4' fill='%23fff'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <h1>NovaKontrol</h1>
+      <p class="tagline">Exercices du Pongbot Nova S&nbsp;Pro</p>
+    </div>
+  </div>
+
+  <div class="topbar-actions">
+    <div class="head-control" title="Réglage MANUEL du robot : le logiciel ne peut ni le lire ni le changer.">
+      <label for="head-angle">Tête (pivot latéral)</label>
+      <select id="head-angle"></select>
+      <span id="head-description" class="muted"></span>
+    </div>
+
+    <details class="setup-control" id="setup-details">
+      <summary title="Réglage MANUEL : où est posé le robot et vers où il pointe.">
+        Placement du robot
+        <span id="setup-summary" class="muted"></span>
+      </summary>
+      <div class="setup-panel">
+        <p class="hint">
+          Réglage <strong>manuel</strong> : ni le Bluetooth ni le logiciel ne peuvent le lire.
+          Décris simplement où tu as posé le robot, pour que l’IA en tienne compte.
+        </p>
+        <div class="grid-3x3" id="setup-grid" role="group" aria-label="Position du robot"></div>
+        <div class="row">
+          <label class="inline" for="setup-angle">Angle</label>
+          <input id="setup-angle" type="number" min="-90" max="90" step="5" value="0">
+          <span class="muted small">° (0 = axe neutre)</span>
+          <button id="setup-reset" class="btn btn-ghost tiny">Remettre à 0°</button>
+        </div>
+        <p class="hint" id="setup-advice"></p>
+      </div>
+    </details>
+
+    <div class="robot-control">
+      <span id="robot-dot" class="dot dot-off" aria-hidden="true"></span>
+      <span id="robot-label">Robot déconnecté</span>
+      <button id="btn-connect" class="btn btn-ghost">Connecter</button>
+      <span id="robot-message" class="robot-message" hidden></span>
+      <button id="btn-stop" class="btn btn-danger" disabled>Arrêter</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ------------------------------------------------ colonne 1 : librairie -->
+  <section class="panel" id="panel-library">
+    <div class="panel-head">
+      <h2>Ma librairie <span id="library-count" class="badge">0</span></h2>
+      <div class="row">
+        <input id="library-search" type="search" placeholder="Filtrer…" autocomplete="off">
+        <button id="btn-new" class="btn btn-primary" title="Créer un exercice vide">Nouveau</button>
+      </div>
+    </div>
+    <ul id="library-list" class="drill-list"></ul>
+    <div class="panel-foot">
+      <button id="btn-import" class="btn btn-ghost">Importer un fichier…</button>
+      <input id="file-import" type="file" accept=".csv,.txt" hidden>
+    </div>
+  </section>
+
+  <!-- -------------------------------------- colonne 2 : table + brouillon -->
+  <section class="panel" id="panel-drill">
+    <div class="panel-head">
+      <div class="name-row">
+        <label for="drill-name" class="name-label">Nom</label>
+        <input id="drill-name" type="text" class="drill-name"
+               placeholder="Aucun exercice sélectionné" disabled
+               autocomplete="off" spellcheck="false">
+        <button id="btn-rename" class="btn btn-ghost tiny" disabled
+                title="Changer le nom de CET exercice, sans en créer un nouveau">✎ Renommer</button>
+        <span id="drill-id" class="muted small"></span>
+      </div>
+      <div class="row" id="drill-actions">
+        <button id="btn-save" class="btn btn-primary" disabled>Enregistrer dans ma librairie</button>
+        <button id="btn-revert" class="btn btn-ghost" hidden>Annuler les changements</button>
+        <button id="btn-send" class="btn btn-accent" disabled>Envoyer au robot</button>
+        <label class="inline" title="Afficher un décompte avant que le robot ne démarre">
+          <input id="chk-countdown" type="checkbox" checked> compte à rebours
+        </label>
+        <button id="btn-export" class="btn btn-ghost" disabled>Exporter</button>
+        <button id="btn-share" class="btn btn-ghost" disabled>Publier en ligne</button>
+        <button id="btn-delete" class="btn btn-ghost" disabled>Supprimer</button>
+      </div>
+    </div>
+
+    <div class="drill-body">
+      <div class="table-wrap">
+        <figure class="view">
+          <figcaption>Vue de côté — trajectoire <span id="side-caption" class="muted small"></span></figcaption>
+          <svg id="side-view" viewBox="0 0 1000 300" role="img"
+               aria-label="Vue de côté du plateau avec la trajectoire de la balle"></svg>
+        </figure>
+
+        <figure class="view">
+          <figcaption>
+            Vue du dessus — placement
+            <span class="drag-hint">glisse une balle · clique une case pour poser le robot</span>
+          </figcaption>
+          <svg id="table-view" viewBox="0 0 100 186" role="img"
+               aria-label="Vue du dessus : plateau et position du robot"></svg>
+        </figure>
+
+        <div class="row drag-controls">
+          <label class="inline" title="Ce que fait un glissement vertical sur une balle">
+            Glissement vertical →
+            <select id="drag-knob">
+              <option value="speed">vitesse</option>
+              <option value="height">hauteur</option>
+            </select>
+          </label>
+          <span id="drag-readout" class="muted small"></span>
+        </div>
+
+        <div class="legend">
+          <span><i class="chip chip-green"></i>top-spin</span>
+          <span><i class="chip chip-yellow"></i>back-spin</span>
+          <span><i class="chip chip-orange"></i>mixte (tête tournée)</span>
+          <span><i class="chip chip-blue"></i>latéral pur</span>
+        </div>
+        <p class="hint" id="depth-hint">
+          <strong>Gauche-droite</strong> : paramètre de placement, réel.
+          <strong>Profondeur</strong> : estimée à partir de la vitesse, de la hauteur <em>et de
+          l'effet</em> — un top-spin plonge et raccourcit, un back-spin flotte et allonge.
+          Le protocole ne transporte aucune profondeur, et le robot ne publie pas sa balistique :
+          l'arc est un modèle, pas une mesure.
+        </p>
+      </div>
+
+      <div class="ball-editor">
+        <div class="editor-head">
+          <h3>Balles <span id="ball-count" class="badge">0</span></h3>
+          <label class="inline">
+            Ordre
+            <select id="drill-random">
+              <option value="false">fixe</option>
+              <option value="true">aléatoire</option>
+            </select>
+          </label>
+          <label class="inline">
+            Mode
+            <select id="drill-mode">
+              <option value="endless">sans fin</option>
+              <option value="minutes">minutes</option>
+              <option value="combos">séries</option>
+            </select>
+          </label>
+          <input id="drill-mode-value" type="number" min="1" max="200" value="1" title="Valeur du mode">
+          <button id="btn-add-ball" class="btn btn-ghost">+ Balle</button>
+          <button id="btn-paste-ball" class="btn btn-ghost" disabled
+                  title="Coller ici les réglages de la balle copiée">📋 Coller</button>
+        </div>
+        <div id="ball-rows" class="ball-rows"></div>
+      </div>
+    </div>
+
+    <div id="notice" class="notice" hidden></div>
+  </section>
+
+  <!-- ------------------------------- colonne 3 : IA + librairie en ligne -->
+  <section class="panel" id="panel-right">
+    <div class="tabs" role="tablist">
+      <button class="tab is-active" data-tab="ai" role="tab">Créer par IA</button>
+      <button class="tab" data-tab="cloud" role="tab">Librairie en ligne</button>
+    </div>
+
+    <div class="tab-panel is-active" id="tab-ai">
+      <p class="muted" id="ai-model"></p>
+      <label for="ai-prompt">Décris ce que tu veux travailler</label>
+      <textarea id="ai-prompt" rows="5" placeholder="Ex. : je veux apprendre à retourner les services très rapides avec effets latéraux qui m'arrivent presque au milieu de la table. Un service à droite, un au centre et un à gauche, aléatoirement, mais tous de la même longueur."></textarea>
+      <label for="ai-name">Nom (facultatif)</label>
+      <input id="ai-name" type="text" placeholder="Laisse vide pour laisser l'IA proposer">
+      <button id="btn-generate" class="btn btn-primary wide">Générer un exercice</button>
+      <p class="hint" id="ai-head-hint"></p>
+      <div id="ai-status" class="status" hidden></div>
+    </div>
+
+    <div class="tab-panel" id="tab-cloud">
+      <p class="hint">
+        Librairie publique d'<a href="https://github.com/olanga/nova" target="_blank" rel="noopener">olanga/nova</a>.
+        Les exercices sont identifiés par un code de 6 caractères.
+      </p>
+      <div class="row">
+        <input id="cloud-search" type="search" placeholder="Nom ou code (ex. JOB857)" autocomplete="off">
+        <button id="btn-cloud-search" class="btn btn-primary">Chercher</button>
+      </div>
+      <div class="row">
+        <input id="cloud-code" type="text" maxlength="6" placeholder="Code à importer" autocomplete="off">
+        <button id="btn-cloud-code" class="btn btn-ghost">Importer par code</button>
+      </div>
+      <p id="cloud-status" class="muted small"></p>
+      <ul id="cloud-list" class="drill-list cloud"></ul>
+      <div class="row center">
+        <button id="btn-cloud-prev" class="btn btn-ghost">← Précédent</button>
+        <span id="cloud-page" class="muted small"></span>
+        <button id="btn-cloud-next" class="btn btn-ghost">Suivant →</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div id="countdown" class="countdown" hidden>
+  <div class="countdown-boite">
+    <div id="countdown-nombre" class="countdown-nombre">5</div>
+    <p id="countdown-texte" class="countdown-texte">Envoi au robot…</p>
+    <button id="countdown-annuler" class="btn btn-ghost">Annuler</button>
+  </div>
+</div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>

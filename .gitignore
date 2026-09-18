@@ -1,0 +1,18 @@
+# Dépendances
+node_modules/
+.npm-cache/
+
+# Configuration locale — ne jamais versionner la clé API
+.env
+
+# Données locales
+data/
+.tmp-tests/
+*.sock
+
+# Dépôts de référence clonés pour la rétro-ingénierie du protocole
+.refs/
+
+# Divers
+*.log
+.DS_Store

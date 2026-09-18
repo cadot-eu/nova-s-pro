@@ -1,0 +1,18 @@
+{
+  "name": "nova-kontrol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Création d'exercices de tennis de table par DeepSeek et envoi au robot Pongbot Nova S Pro en Bluetooth Low Energy",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": { "nova": "./src/cli.js" },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "cli": "node src/cli.js",
+    "mcp": "node src/mcp.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "node-ble": "^1.13.0"
+  }
+}

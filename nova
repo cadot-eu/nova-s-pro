@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+/**
+ * Lance NovaKontrol sans installation globale.
+ *
+ * Volontairement écrit en JavaScript et non en shell : Node traite un fichier
+ * sans extension comme du CommonJS, si bien qu'un `import` statique échouerait.
+ * L'import dynamique fonctionne dans les deux cas, ce qui permet d'utiliser
+ * indifféremment `./nova doctor` et `node nova doctor`.
+ *
+ * Pour disposer de la commande partout : npm link
+ */
+import('./src/cli.js')
+  .then(({ main }) => main())
+  .then((code) => process.exit(code ?? 0))
+  .catch((err) => {
+    console.error(err?.stack ?? err);
+    process.exit(1);
+  });

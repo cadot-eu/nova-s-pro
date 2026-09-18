@@ -1,0 +1,16 @@
+{
+  "_commentaire": [
+    "Configuration MCP de NovaKontrol.",
+    "Remplace /home/michael/novaKontrol par le chemin absolu de ce dossier.",
+    "Claude Desktop : ~/Library/Application Support/Claude/claude_desktop_config.json",
+    "Autres clients MCP (LobeHub, etc.) : même structure mcpServers.",
+    "Tu peux aussi utiliser la commande « nova » si le projet est lié avec npm link,",
+    "ou « node /chemin/vers/src/mcp.js » sans dépendre du PATH."
+  ],
+  "mcpServers": {
+    "novakontrol": {
+      "command": "node",
+      "args": ["/home/michael/novaKontrol/src/mcp.js"]
+    }
+  }
+}
